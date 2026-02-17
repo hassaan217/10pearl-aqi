@@ -1,0 +1,167 @@
+name: Training Pipeline - Daily Model Retraining
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Run daily at 2 AM
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  train-model:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        pip install pymongo pandas numpy scikit-learn xgboost lightgbm joblib python-dotenv
+    
+    - name: Train model
+      env:
+        MONGO_URI: ${{ secrets.MONGO_URI }}
+      run: |
+        python -c "
+import os
+import pandas as pd
+import numpy as np
+from pymongo import MongoClient
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.preprocessing import StandardScaler
+import joblib
+from datetime import datetime
+
+# Connect to MongoDB
+client = MongoClient(os.environ['MONGO_URI'])
+db = client['air_quality']
+
+# Load data
+cursor = db['raw_aqi'].find()
+df = pd.DataFrame(list(cursor))
+if '_id' in df.columns:
+    df.drop('_id', axis=1, inplace=True)
+
+print(f'Loaded {len(df)} records')
+
+# Prepare data
+df['time'] = pd.to_datetime(df['time'])
+df.set_index('time', inplace=True)
+
+# Add time features
+df['hour'] = df.index.hour
+df['month'] = df.index.month
+df['day_of_week'] = df.index.dayofweek
+
+# Rename columns
+rename_map = {
+    'pm2_5 (μg/m³)': 'pm25',
+    'pm10 (μg/m³)': 'pm10',
+    'carbon_monoxide (μg/m³)': 'co',
+    'nitrogen_dioxide (μg/m³)': 'no2',
+    'sulphur_dioxide (μg/m³)': 'so2',
+    'ozone (μg/m³)': 'o3',
+    'temperature_2m (°C)': 'temperature',
+    'relative_humidity_2m (%)': 'humidity',
+    'wind_speed_10m (km/h)': 'wind_speed'
+}
+df.rename(columns=rename_map, inplace=True)
+
+# Calculate AQI
+def calculate_aqi(pm25):
+    if pd.isna(pm25):
+        return np.nan
+    if pm25 <= 30:
+        return pm25 * (50/30)
+    elif pm25 <= 60:
+        return 50 + (pm25 - 30) * (50/30)
+    elif pm25 <= 90:
+        return 100 + (pm25 - 60) * (100/30)
+    elif pm25 <= 120:
+        return 200 + (pm25 - 90) * (100/30)
+    elif pm25 <= 250:
+        return 300 + (pm25 - 120) * (100/130)
+    else:
+        return 400 + (pm25 - 250) * (100/250)
+
+df['aqi'] = df['pm25'].apply(calculate_aqi)
+df.dropna(subset=['aqi'], inplace=True)
+
+# Features
+feature_cols = ['temperature', 'humidity', 'wind_speed', 'pm25', 'pm10', 
+                'no2', 'so2', 'o3', 'co', 'hour', 'month', 'day_of_week']
+available_features = [col for col in feature_cols if col in df.columns]
+
+X = df[available_features].fillna(df[available_features].median())
+y = df['aqi']
+
+# Split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+
+# Scale
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Train multiple models
+models = {
+    'Random Forest': RandomForestRegressor(n_estimators=100, max_depth=15, random_state=42),
+    'XGBoost': XGBRegressor(n_estimators=100, max_depth=8, learning_rate=0.1, random_state=42),
+    'LightGBM': LGBMRegressor(n_estimators=100, max_depth=8, learning_rate=0.1, random_state=42)
+}
+
+results = {}
+best_model = None
+best_score = -np.inf
+best_name = ''
+
+for name, model in models.items():
+    model.fit(X_train_scaled, y_train)
+    y_pred = model.predict(X_test_scaled)
+    r2 = r2_score(y_test, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    
+    results[name] = {'r2': r2, 'rmse': rmse}
+    print(f'{name}: R²={r2:.3f}, RMSE={rmse:.2f}')
+    
+    if r2 > best_score:
+        best_score = r2
+        best_model = model
+        best_name = name
+
+# Save best model and scaler
+os.makedirs('models', exist_ok=True)
+joblib.dump(best_model, 'models/best_model.pkl')
+joblib.dump(scaler, 'models/scaler.pkl')
+
+# Save metadata
+metadata = {
+    'best_model': best_name,
+    'r2_score': best_score,
+    'rmse': results[best_name]['rmse'],
+    'timestamp': datetime.now().isoformat(),
+    'features': available_features,
+    'training_samples': len(X_train)
+}
+
+import json
+with open('models/metadata.json', 'w') as f:
+    json.dump(metadata, f, indent=2)
+
+print(f'✅ Best model: {best_name} with R²={best_score:.3f}')
+print(f'✅ Model saved to models/best_model.pkl')
+"
+
+    - name: Upload model artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: trained-model
+        path: models/

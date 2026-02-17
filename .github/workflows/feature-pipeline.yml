@@ -1,0 +1,50 @@
+name: Feature Pipeline - Hourly Data Collection
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Run every hour
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  collect-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        pip install pymongo pandas python-dotenv requests
+    
+    - name: Run data collection
+      env:
+        MONGO_URI: ${{ secrets.MONGO_URI }}
+      run: |
+        python -c "
+import os
+import pandas as pd
+from pymongo import MongoClient
+from datetime import datetime
+
+# Connect to MongoDB
+client = MongoClient(os.environ['MONGO_URI'])
+db = client['air_quality']
+
+# Load and save the CSV data
+df = pd.read_csv('air qaulity.csv')
+df['time'] = pd.to_datetime(df['time'])
+
+# Convert to dict and insert
+data = df.to_dict('records')
+db['raw_aqi'].delete_many({})
+db['raw_aqi'].insert_many(data)
+
+print(f'✅ Data updated at {datetime.now()}')
+print(f'Records: {len(data)}')
+"
