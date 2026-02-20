@@ -33,7 +33,9 @@ const Card = ({ title, icon: Icon, children, className = "", loading = false }) 
         <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
       )}
     </div>
-    {children}
+    <div style={{ minHeight: '200px', width: '100%' }}>
+      {children}
+    </div>
   </div>
 );
 
@@ -88,7 +90,7 @@ const AQIGauge = ({ value }) => {
     return 'Severe';
   };
 
-  const percentage = (value / 500) * 100;
+  const percentage = Math.min((value / 500) * 100, 100);
   const color = getColor(value);
 
   return (
@@ -199,8 +201,8 @@ export default function AQIDashboard() {
   const [showModelDetails, setShowModelDetails] = useState(true);
   const [modelMetrics, setModelMetrics] = useState(null);
 
-  // Mock model data for visualization
-  const models = [
+  // Mock model data for visualization (will be replaced by API data)
+  const [models, setModels] = useState([
     { 
       id: 'xgb', 
       name: 'XGBoost', 
@@ -286,11 +288,11 @@ export default function AQIDashboard() {
       cvScore: 91.5,
       importance: { pm25: 0.23, pm10: 0.19, no2: 0.18, so2: 0.15, o3: 0.14, co: 0.08, temp: 0.03 }
     }
-  ];
+  ]);
 
   const bestModelId = useMemo(() => {
     return models.sort((a, b) => b.accuracy - a.accuracy)[0].id;
-  }, []);
+  }, [models]);
 
   const selectedModel = models.find(m => m.id === selectedModelId) || models[0];
 
@@ -301,18 +303,6 @@ export default function AQIDashboard() {
       if (response.ok) {
         const data = await response.json();
         setBackendStatus('connected');
-        
-        // Try to get model metrics if available
-        try {
-          const metricsRes = await fetch(`${API_BASE_URL}/api/model-metrics`);
-          if (metricsRes.ok) {
-            const metricsData = await metricsRes.json();
-            setModelMetrics(metricsData);
-          }
-        } catch (e) {
-          console.log('Model metrics not available');
-        }
-        
         return true;
       }
     } catch (err) {
@@ -320,6 +310,21 @@ export default function AQIDashboard() {
     }
     setBackendStatus('disconnected');
     return false;
+  };
+
+  // Fetch model metrics
+  const fetchModelMetrics = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/model-metrics`);
+      if (response.ok) {
+        const data = await response.json();
+        setModels(data.models);
+        setSelectedModelId(data.selected_model);
+        setModelMetrics(data);
+      }
+    } catch (err) {
+      console.log('Model metrics not available, using defaults');
+    }
   };
 
   // Fetch data from backend
@@ -335,13 +340,16 @@ export default function AQIDashboard() {
       }
       
       // Fetch forecast
-      const forecastRes = await fetch(`${API_BASE_URL}/api/forecast?hours=72`);
+      const forecastRes = await fetch(`${API_BASE_URL}/api/forecast?days=3`);
       if (!forecastRes.ok) throw new Error('Failed to fetch forecast');
       const forecastData = await forecastRes.json();
       
       // Fetch latest data
       const latestRes = await fetch(`${API_BASE_URL}/api/latest`);
       const latestData = await latestRes.json();
+      
+      // Fetch model metrics
+      await fetchModelMetrics();
       
       setForecast(forecastData.forecast);
       setLatestData(latestData);
@@ -434,6 +442,7 @@ export default function AQIDashboard() {
 
   // Feature importance data for chart
   const featureImportanceData = useMemo(() => {
+    if (!selectedModel.importance) return [];
     return Object.entries(selectedModel.importance).map(([name, value]) => ({
       name: name.toUpperCase(),
       value: value * 100
@@ -672,7 +681,7 @@ export default function AQIDashboard() {
             {currentDayData.slice(0, 12).map((hour, idx) => (
               <div key={idx} className="bg-gray-800 rounded-lg p-2 text-center">
                 <p className="text-xs text-gray-500">{hour.timeLabel}</p>
-                {hour.weather === 'Sunny' ? (
+                {hour.weather?.toLowerCase().includes('sun') ? (
                   <Sun className="w-5 h-5 text-yellow-500 mx-auto my-1" />
                 ) : (
                   <Cloud className="w-5 h-5 text-gray-400 mx-auto my-1" />
@@ -720,7 +729,7 @@ export default function AQIDashboard() {
                 <Card title="Model Performance Comparison" icon={Target}>
                   <div className="h-72">
                     <ResponsiveContainer width="100%" height="100%">
-                      <RadarChart data={models}>
+                      <RadarChart data={models.map(m => ({ name: m.name, accuracy: m.accuracy }))}>
                         <PolarGrid stroke="#374151" />
                         <PolarAngleAxis dataKey="name" tick={{ fill: '#9ca3af', fontSize: 10 }} />
                         <PolarRadiusAxis angle={45} domain={[80, 100]} tick={{ fill: '#6b7280' }} />
