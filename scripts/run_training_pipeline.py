@@ -42,10 +42,11 @@ def main():
         
         if '_id' in df.columns: df.drop('_id', axis=1, inplace=True)
         
+        # --- FIX: Handle Empty DB Gracefully ---
         if len(df) == 0:
-            print("⚠️ No data in MongoDB. Cannot train.")
-            sys.exit(1)
-
+            print("ℹ️ Skipping training — no data yet. Waiting for Feature Pipeline to collect data.")
+            sys.exit(0) # Exit 0 = Success (Green Checkmark), Exit 1 = Failure (Red X)
+        
         print(f"✅ Loaded {len(df)} records")
 
         # Preprocessing (Matches main.py logic)

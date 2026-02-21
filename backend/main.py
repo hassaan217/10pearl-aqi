@@ -27,17 +27,26 @@ warnings.filterwarnings('ignore')
 
 load_dotenv()
 
+# --- SECURITY FIX: REMOVED HARDCODED DEFAULTS ---
+
 # Database Configuration
-MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://hassaanshshid7_db_user:LPaYter0.6qlyvyj.mongodb.net/')
+MONGO_URI = os.getenv('MONGO_URI')
 DB_NAME = "air_quality"
 
 # Model Configuration
-MODEL_PATH = os.getenv('MODEL_PATH', 'models/aqi_model.pkl')
+MODEL_PATH = os.getenv('MODEL_PATH', 'models/aqi_model.pkl') # Default path is fine, not a secret
 
 # OpenWeather API Configuration
-OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY', '394e28afe5ddfbc')
-LATITUDE = float(os.getenv('LATITUDE', 24.8607))
+OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY')
+LATITUDE = float(os.getenv('LATITUDE', 24.8607)) # Defaults for location are fine
 LONGITUDE = float(os.getenv('LONGITUDE', 67.0011))
+
+# --- SAFETY CHECK ---
+if not MONGO_URI or not OPENWEATHER_API_KEY:
+    raise RuntimeError(
+        "❌ CRITICAL: Missing required environment variables. "
+        "Please ensure MONGO_URI and OPENWEATHER_API_KEY are set in your .env file."
+    )
 
 # Create models directory
 os.makedirs("models", exist_ok=True)
@@ -202,12 +211,12 @@ def load_data_from_mongodb():
         df.sort_index(inplace=True)
         
         rename_map = {
-            'pm2_5 (μg/m³)': 'pm25',
-            'pm10 (μg/m³)': 'pm10',
-            'carbon_monoxide (μg/m³)': 'co',
-            'nitrogen_dioxide (μg/m³)': 'no2',
-            'sulphur_dioxide (μg/m³)': 'so2',
-            'ozone (μg/m³)': 'o3',
+            'pm2_5 (µg/m³)': 'pm25',
+            'pm10 (µg/m³)': 'pm10',
+            'carbon_monoxide (µg/m³)': 'co',
+            'nitrogen_dioxide (µg/m³)': 'no2',
+            'sulphur_dioxide (µg/m³)': 'so2',
+            'ozone (µg/m³)': 'o3',
             'temperature_2m (°C)': 'temperature',
             'relative_humidity_2m (%)': 'humidity',
             'wind_speed_10m (km/h)': 'wind_speed'
@@ -800,7 +809,7 @@ async def get_latest_data():
                     break
         
         if latest:
-            pm25 = latest.get('pm2_5 (μg/m³)', 45.2)
+            pm25 = latest.get('pm2_5 (µg/m³)', 45.2)
             
             if pm25 <= 30: 
                 aqi = pm25 * (50/30)
@@ -822,8 +831,8 @@ async def get_latest_data():
                 "category": get_aqi_category(aqi),
                 "temperature": latest.get('temperature_2m (°C)', 28.5),
                 "humidity": latest.get('relative_humidity_2m (%)', 65),
-                "pm10": latest.get('pm10 (μg/m³)', 78),
-                "no2": latest.get('nitrogen_dioxide (μg/m³)', 35)
+                "pm10": latest.get('pm10 (µg/m³)', 78),
+                "no2": latest.get('nitrogen_dioxide (µg/m³)', 35)
             }
         else:
             return {

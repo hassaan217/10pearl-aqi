@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Environment Variables (Security)
+.env
+backend/.env
+
+# Models / Data
+models/*.pkl
+*.csv
+*.db
