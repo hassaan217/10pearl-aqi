@@ -1,11 +1,11 @@
 fastapi
 uvicorn
 pymongo
-pandas
+python-dotenv
+requests
 numpy
+pandas
 scikit-learn
+joblib
 xgboost
 lightgbm
-joblib
-requests
-python-dotenv
