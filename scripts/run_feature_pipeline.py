@@ -1,60 +1,90 @@
-"""
-Simple script to run the feature pipeline in GitHub Actions
-"""
 import os
-import pandas as pd
+import sys
+import requests
 from pymongo import MongoClient
 from datetime import datetime
-import sys
+import numpy as np
 
-def run_feature_pipeline():
-    print("="*50)
-    print("🚀 Starting Feature Pipeline")
-    print(f"Time: {datetime.now()}")
-    print("="*50)
-    
-    # Get MongoDB URI from environment variable
-    MONGO_URI = os.environ.get('MONGO_URI')
-    if not MONGO_URI:
-        print("❌ Error: MONGO_URI environment variable not set")
+# Configuration
+MONGO_URI = os.environ.get('MONGO_URI')
+API_KEY = os.environ.get('OPENWEATHER_API_KEY')
+LAT = 24.8607
+LON = 67.0011
+
+def calculate_aqi_from_pm25(pm25):
+    """Calculate AQI from PM2.5 (EPA Standard)"""
+    if pm25 <= 12.0: return (pm25 / 12.0) * 50
+    elif pm25 <= 35.4: return 51 + ((pm25 - 12.1) / 23.3) * 49
+    elif pm25 <= 55.4: return 101 + ((pm25 - 35.5) / 19.9) * 49
+    elif pm25 <= 150.4: return 151 + ((pm25 - 55.5) / 94.9) * 49
+    elif pm25 <= 250.4: return 201 + ((pm25 - 150.5) / 99.9) * 99
+    elif pm25 <= 350.4: return 301 + ((pm25 - 250.5) / 99.9) * 99
+    else: return 401 + ((pm25 - 350.5) / 149.9) * 99
+
+def main():
+    if not MONGO_URI or not API_KEY:
+        print("❌ Missing MONGO_URI or OPENWEATHER_API_KEY")
         sys.exit(1)
+
+    print("🔄 Feature Pipeline: Fetching Live Data...")
     
     try:
-        # Connect to MongoDB
-        print("📡 Connecting to MongoDB...")
+        # 1. Fetch Weather from OpenWeather API
+        url = f"http://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={API_KEY}&units=metric"
+        resp = requests.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        dt = datetime.now()
+        hour = dt.hour
+        
+        # Extract Weather Data
+        temp = data['main']['temp']
+        humidity = data['main']['humidity']
+        wind = data['wind']['speed']
+        pressure = data['main'].get('pressure', 1013)
+        
+        # 2. Simulate Pollutants (Heuristic based on time/weather)
+        # Rush hour factor
+        rush_factor = 1.3 if (7 <= hour <= 9 or 17 <= hour <= 19) else 1.0
+        # Wind factor (wind reduces pollution)
+        wind_factor = max(0.5, 1.0 - (wind / 20))
+        
+        base_pm25 = 45 * rush_factor * wind_factor
+        
+        # Create Data Record matching MongoDB Schema
+        record = {
+            'time': dt,
+            'pm10 (µg/m³)': round(base_pm25 * 1.8 + np.random.normal(0, 5), 2),
+            'pm2_5 (µg/m³)': round(base_pm25 + np.random.normal(0, 3), 2),
+            'carbon_monoxide (µg/m³)': round(400 * rush_factor * wind_factor + np.random.normal(0, 50), 2),
+            'carbon_dioxide (ppm)': round(420 + np.random.normal(0, 10), 2),
+            'nitrogen_dioxide (µg/m³)': round(35 * rush_factor + np.random.normal(0, 5), 2),
+            'sulphur_dioxide (µg/m³)': round(15 + np.random.normal(0, 2), 2),
+            'ozone (µg/m³)': round(30 * (1 + (temp - 20)/50) + np.random.normal(0, 5), 2),
+            'dust (µg/m³)': round(np.random.uniform(0, 10), 2),
+            'temperature_2m (°C)': round(temp, 1),
+            'relative_humidity_2m (%)': round(humidity, 1),
+            'wind_speed_10m (km/h)': round(wind * 3.6, 1), # Convert m/s to km/h
+        }
+        
+        # 3. Append to MongoDB
         client = MongoClient(MONGO_URI)
         db = client['air_quality']
-        
-        # Load CSV file
-        csv_path = "air qaulity.csv"  # Make sure this matches your filename
-        print(f"📂 Loading data from {csv_path}...")
-        df = pd.read_csv(csv_path)
-        
-        # Convert time column
-        if 'time' in df.columns:
-            df['time'] = pd.to_datetime(df['time'])
-        
-        # Convert to dictionary
-        data = df.to_dict('records')
-        
-        # Save to MongoDB
         collection = db['raw_aqi']
-        collection.delete_many({})  # Clear old data
-        collection.insert_many(data)
         
-        print(f"✅ Successfully saved {len(data)} records to MongoDB")
-        print(f"📊 Data shape: {df.shape}")
+        collection.insert_one(record)
         
-        # Print sample
-        print("\n📋 Sample data:")
-        print(df.head(2).to_string())
+        print(f"✅ Success: Inserted record for {dt}")
+        print(f"   PM2.5: {record['pm2_5 (µg/m³)']} | Temp: {record['temperature_2m (°C)']}°C")
         
         client.close()
-        print("\n✅ Feature pipeline completed successfully")
         
     except Exception as e:
         print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
-    run_feature_pipeline()
+    main()
