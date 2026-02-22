@@ -2,12 +2,15 @@
 """
 Feature Pipeline: Fetches live weather data + simulates pollutants,
 then stores records in MongoDB for AQI prediction.
+
+✅ Fixed for GitHub Actions: TLS 1.2+, certifi CA bundle, robust timeouts
 """
 
 import os
 import sys
 import requests
-from pymongo import MongoClient
+import certifi
+from pymongo import MongoClient, ServerSelectionTimeoutError
 from datetime import datetime, timezone
 import numpy as np
 
@@ -19,10 +22,7 @@ def load_env_vars():
     
     if missing:
         print(f"❌ Missing required environment variables: {', '.join(missing)}")
-        print(f"💡 Hint: Set these in GitHub Secrets or your .env file")
-        for var in required:
-            val = os.getenv(var)
-            print(f"   {var}: {'✓ Set' if val else '✗ Missing'} (length: {len(val) if val else 0})")
+        print(f"💡 Set these in GitHub Secrets: Settings → Secrets and variables → Actions")
         sys.exit(1)
     
     return {
@@ -33,6 +33,41 @@ def load_env_vars():
         'CITY': os.getenv('CITY', 'Karachi'),
         'COUNTRY': os.getenv('COUNTRY', 'PK')
     }
+
+def connect_to_mongodb(uri: str, timeout_ms: int = 30000):
+    """
+    Connect to MongoDB Atlas with TLS/SSL settings compatible with GitHub Actions.
+    
+    ✅ Uses certifi CA bundle for certificate verification
+    ✅ Forces TLS 1.2+
+    ✅ Extended timeouts for CI/CD environments
+    """
+    try:
+        client = MongoClient(
+            uri,
+            tls=True,
+            tlsCAFile=certifi.where(),  # Use certifi's CA bundle
+            serverSelectionTimeoutMS=timeout_ms,
+            connectTimeoutMS=timeout_ms,
+            socketTimeoutMS=timeout_ms,
+            retryWrites=True,
+            retryReads=True
+        )
+        # Verify connection with ping
+        client.admin.command('ping')
+        print("✅ MongoDB connection successful")
+        return client
+    except ServerSelectionTimeoutError as e:
+        print(f"❌ MongoDB connection timeout: {e}")
+        print("💡 Troubleshooting:")
+        print("   1. Atlas → Network Access → Allow 0.0.0.0/0 (dev) or GitHub IPs")
+        print("   2. Verify MONGO_URI password is URL-encoded if it has special chars")
+        print("   3. Ensure cluster is RUNNING (not paused)")
+        print("   4. Check firewall/proxy settings in CI environment")
+        raise
+    except Exception as e:
+        print(f"❌ MongoDB connection error: {type(e).__name__}: {e}")
+        raise
 
 def calculate_aqi_from_pm25(pm25: float) -> float:
     """Calculate AQI from PM2.5 using EPA breakpoint method."""
@@ -45,15 +80,24 @@ def calculate_aqi_from_pm25(pm25: float) -> float:
     else: return min(500, 401 + ((pm25 - 350.5) / 149.9) * 99)
 
 def fetch_weather_data(api_key: str, lat: float, lon: float) -> dict:
-    """Fetch current weather from OpenWeatherMap API."""
-    url = "http://api.openweathermap.org/data/2.5/weather"
+    """Fetch current weather from OpenWeatherMap API using HTTPS."""
+    url = "https://api.openweathermap.org/data/2.5/weather"  # ✅ HTTPS required
     params = {
         'lat': lat, 'lon': lon,
         'appid': api_key, 'units': 'metric'
     }
-    resp = requests.get(url, params=params, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError as e:
+        if resp.status_code == 401:
+            print("❌ OpenWeatherMap API Error 401: Invalid API key")
+            print("💡 Fix: Verify key at https://home.openweathermap.org/api_keys")
+            print("💡 Ensure email is verified and key has 'Current Weather Data' permission")
+        elif resp.status_code == 429:
+            print("⚠️ OpenWeatherMap Rate Limited (429): Wait 60 seconds")
+        raise
 
 def simulate_pollutants(weather: dict, hour: int) -> dict:
     """Generate realistic pollutant estimates based on weather + time heuristics."""
@@ -67,12 +111,11 @@ def simulate_pollutants(weather: dict, hour: int) -> dict:
     night_factor = 0.85 if (22 <= hour or hour <= 5) else 1.0
     
     # Weather-based factors
-    wind_factor = max(0.4, 1.0 - (wind / 25))  # Wind disperses pollution
-    humidity_factor = 1.1 if humidity > 70 else 0.95  # High humidity can trap pollutants
+    wind_factor = max(0.4, 1.0 - (wind / 25))
+    humidity_factor = 1.1 if humidity > 70 else 0.95
     
     base_pm25 = 40 * rush_factor * night_factor * wind_factor * humidity_factor
     
-    # Add realistic noise
     def noise(mean: float, std: float) -> float:
         return round(mean + np.random.normal(0, std), 2)
     
@@ -92,14 +135,13 @@ def main():
     config = load_env_vars()
     
     try:
-        # 1. Fetch Weather Data
+        # 1. Fetch Weather Data (HTTPS)
         print(f"🌤️  Fetching weather for {config['CITY']}, {config['COUNTRY']}...")
         weather = fetch_weather_data(config['API_KEY'], config['LAT'], config['LON'])
         
         # 2. Prepare Record
         dt = datetime.now(timezone.utc)
         hour = dt.hour
-        
         pollutants = simulate_pollutants(weather, hour)
         
         record = {
@@ -115,14 +157,13 @@ def main():
             'wind_speed_10m (km/h)': round(weather['wind']['speed'] * 3.6, 1),
             'pressure_hPa': weather['main'].get('pressure', 1013),
             'aqi_calculated': round(calculate_aqi_from_pm25(pollutants['pm2_5 (µg/m³)']), 1),
-            'pipeline_version': '1.2.0',
+            'pipeline_version': '1.3.0',
             'data_source': 'openweathermap+simulation'
         }
         
-        # 3. Store in MongoDB
+        # 3. Store in MongoDB (with SSL/TLS fix)
         print("💾 Inserting record into MongoDB...")
-        client = MongoClient(config['MONGO_URI'], serverSelectionTimeoutMS=5000)
-        client.admin.command('ping')  # Verify connection
+        client = connect_to_mongodb(config['MONGO_URI'])
         db = client['air_quality']
         collection = db['raw_aqi']
         
@@ -138,6 +179,9 @@ def main():
         
     except requests.exceptions.RequestException as e:
         print(f"❌ API Error: {e}")
+        sys.exit(1)
+    except ServerSelectionTimeoutError:
+        print("❌ MongoDB connection failed - check Atlas Network Access settings")
         sys.exit(1)
     except Exception as e:
         print(f"❌ Pipeline Error: {type(e).__name__}: {e}")
