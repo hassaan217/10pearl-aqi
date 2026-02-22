@@ -23,30 +23,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
 
-      # DEBUG STEP - Add this to see what's happening
-      - name: 🔍 Debug Secrets
+      - name: 🔍 DEBUG - Show what we have
         run: |
-          echo "=== Checking Environment Variables ==="
-          echo "MONGO_URI exists: $([ -n "$MONGO_URI" ] && echo 'YES ✓' || echo 'NO ✗')"
-          echo "OPENWEATHER_API_KEY exists: $([ -n "$OPENWEATHER_API_KEY" ] && echo 'YES ✓' || echo 'NO ✗')"
-          echo "CITY: ${CITY:-'NOT SET'}"
-          echo "COUNTRY: ${COUNTRY:-'NOT SET'}"
-          echo "LATITUDE: ${LATITUDE:-'NOT SET'}"
-          echo "LONGITUDE: ${LONGITUDE:-'NOT SET'}"
-          echo ""
-          echo "MONGO_URI length: ${#MONGO_URI}"
-          echo "OPENWEATHER_API_KEY length: ${#OPENWEATHER_API_KEY}"
-          echo ""
-          echo "First 20 chars of MONGO_URI: ${MONGO_URI:0:20}"
-          echo "First 10 chars of API_KEY: ${OPENWEATHER_API_KEY:0:10}"
+          echo "=== CHECKING SECRETS ==="
+          if [ -n "$MONGO_URI" ]; then
+            echo "✓ MONGO_URI exists (length: ${#MONGO_URI})"
+            echo "  Starts with: ${MONGO_URI:0:15}..."
+          else
+            echo "✗ MONGO_URI is EMPTY or NOT SET"
+          fi
+          
+          if [ -n "$OPENWEATHER_API_KEY" ]; then
+            echo "✓ OPENWEATHER_API_KEY exists (length: ${#OPENWEATHER_API_KEY})"
+          else
+            echo "✗ OPENWEATHER_API_KEY is EMPTY or NOT SET"
+          fi
+          echo "========================"
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          CITY: ${{ secrets.CITY }}
-          COUNTRY: ${{ secrets.COUNTRY }}
-          LATITUDE: ${{ secrets.LATITUDE }}
-          LONGITUDE: ${{ secrets.LONGITUDE }}
-        continue-on-error: true
 
       - name: Run feature pipeline
         env:
@@ -56,6 +51,5 @@ jobs:
           COUNTRY: ${{ secrets.COUNTRY }}
           LATITUDE: ${{ secrets.LATITUDE }}
           LONGITUDE: ${{ secrets.LONGITUDE }}
-        run: |
-          echo "🔄 Starting feature pipeline..."
-          python scripts/run_feature_pipeline.py
+          MODEL_PATH: ${{ secrets.MODEL_PATH }}
+        run: python scripts/run_feature_pipeline.py
