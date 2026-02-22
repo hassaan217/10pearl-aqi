@@ -2,6 +2,8 @@
 """
 Training Pipeline: Loads historical data from MongoDB, trains ML models,
 and saves the best performer for AQI prediction.
+
+✅ Fixed for GitHub Actions: TLS 1.2+, certifi CA bundle, robust timeouts
 """
 
 import os
@@ -10,9 +12,10 @@ import json
 from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
-from pymongo import MongoClient
+import certifi
+from pymongo import MongoClient, ServerSelectionTimeoutError
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
@@ -33,6 +36,25 @@ def load_env_vars():
         'MODEL_PATH': os.getenv('MODEL_PATH', 'backend/models/best_model.pkl')
     }
 
+def connect_to_mongodb(uri: str, timeout_ms: int = 30000):
+    """Connect to MongoDB Atlas with TLS/SSL settings for CI/CD."""
+    try:
+        client = MongoClient(
+            uri,
+            tls=True,
+            tlsCAFile=certifi.where(),
+            serverSelectionTimeoutMS=timeout_ms,
+            connectTimeoutMS=timeout_ms,
+            socketTimeoutMS=timeout_ms,
+            retryWrites=True
+        )
+        client.admin.command('ping')
+        print("✅ MongoDB connection successful")
+        return client
+    except Exception as e:
+        print(f"❌ MongoDB connection error: {type(e).__name__}: {e}")
+        raise
+
 def calculate_aqi_from_pm25(pm25) -> float:
     """EPA-standard AQI calculation from PM2.5."""
     if pd.isna(pm25): return 50.0
@@ -51,8 +73,7 @@ def main():
     try:
         # 1. Connect to MongoDB & Load Data
         print("🔌 Connecting to MongoDB...")
-        client = MongoClient(config['MONGO_URI'], serverSelectionTimeoutMS=10000)
-        client.admin.command('ping')
+        client = connect_to_mongodb(config['MONGO_URI'])
         db = client['air_quality']
         
         print("📥 Loading historical data from 'raw_aqi' collection...")
@@ -65,10 +86,11 @@ def main():
         # Handle empty dataset gracefully
         if len(df) == 0:
             print("ℹ️  No training data available yet. Waiting for Feature Pipeline to collect data.")
-            print("✅ Exiting with success (no error) - pipeline will retry on next schedule.")
+            print("✅ Exiting with success - pipeline will retry on next schedule.")
+            client.close()
             sys.exit(0)
         
-        print(f"✅ Loaded {len(df)} records from {df['time'].min()} to {df['time'].max()}")
+        print(f"✅ Loaded {len(df)} records")
 
         # 2. Preprocessing
         df['time'] = pd.to_datetime(df['time'])
@@ -91,7 +113,8 @@ def main():
         df.dropna(subset=['aqi', 'pm25'], inplace=True)
         
         if len(df) < 100:
-            print(f"⚠️  Only {len(df)} valid records after cleaning. Need ≥100 for training.")
+            print(f"⚠️  Only {len(df)} valid records. Need ≥100 for training.")
+            client.close()
             sys.exit(0)
 
         # Feature engineering
@@ -103,15 +126,13 @@ def main():
         # Select features
         feature_cols = [
             'temperature', 'humidity', 'wind_speed', 'pressure_hPa',
-            'pm25', 'pm10', 'co', 'co2', 'no2', 'so2', 'o3', 'dust',
+            'pm25', 'pm10', 'co', 'no2', 'so2', 'o3',
             'hour', 'month', 'day_of_week', 'is_rush_hour'
         ]
         available_features = [col for col in feature_cols if col in df.columns]
         
         X = df[available_features].copy()
         y = df['aqi'].copy()
-        
-        # Handle missing values
         X = X.fillna(X.median(numeric_only=True))
 
         # 3. Train/Test Split (time-series aware)
@@ -124,22 +145,11 @@ def main():
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
 
-        # 5. Model Training & Evaluation
+        # 5. Model Training
         models = {
-            'RandomForest': RandomForestRegressor(
-                n_estimators=150, max_depth=12, min_samples_split=5,
-                random_state=42, n_jobs=-1
-            ),
-            'XGBoost': XGBRegressor(
-                n_estimators=150, max_depth=7, learning_rate=0.08,
-                subsample=0.8, colsample_bytree=0.8,
-                random_state=42, n_jobs=-1
-            ),
-            'LightGBM': LGBMRegressor(
-                n_estimators=150, max_depth=7, learning_rate=0.08,
-                subsample=0.8, colsample_bytree=0.8,
-                random_state=42, verbose=-1, n_jobs=-1
-            ),
+            'RandomForest': RandomForestRegressor(n_estimators=150, max_depth=12, random_state=42, n_jobs=-1),
+            'XGBoost': XGBRegressor(n_estimators=150, max_depth=7, learning_rate=0.08, random_state=42, n_jobs=-1),
+            'LightGBM': LGBMRegressor(n_estimators=150, max_depth=7, learning_rate=0.08, random_state=42, verbose=-1, n_jobs=-1),
             'Ridge': Ridge(alpha=1.0)
         }
 
@@ -180,20 +190,13 @@ def main():
         metadata = {
             'best_model': best_name,
             'best_r2_score': float(best_score),
-            'all_metrics': {
-                name: {k: float(v) for k, v in metrics.items()}
-                for name, metrics in results.items()
-            },
+            'all_metrics': {name: {k: float(v) for k, v in m.items()} for name, m in results.items()},
             'training_info': {
                 'n_samples': len(df),
                 'n_features': len(available_features),
                 'feature_names': available_features,
-                'train_period': {
-                    'start': df.index.min().isoformat(),
-                    'end': df.index.max().isoformat()
-                },
                 'timestamp': datetime.now(timezone.utc).isoformat(),
-                'pipeline_version': '1.2.0'
+                'pipeline_version': '1.3.0'
             }
         }
         
@@ -202,13 +205,13 @@ def main():
         
         print(f"✅ Training Complete!")
         print(f"   🏆 Best Model: {best_name} (R² = {best_score:.4f})")
-        print(f"   📦 Saved: {model_filename}")
-        print(f"   ⚖️  Scaler: {scaler_filename}")
-        print(f"   📋 Metadata: {metadata_filename}")
         
         client.close()
         sys.exit(0)
         
+    except ServerSelectionTimeoutError:
+        print("❌ MongoDB connection failed - check Atlas Network Access")
+        sys.exit(1)
     except Exception as e:
         print(f"❌ Training Pipeline Error: {type(e).__name__}: {e}")
         import traceback
