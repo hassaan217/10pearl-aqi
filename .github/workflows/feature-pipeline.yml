@@ -1,8 +1,8 @@
 name: Feature Pipeline - MongoDB Data Collection
 
 on:
-  push:
-    branches: [ main ]
+  schedule:
+    - cron: '0 * * * *'   # Runs every hour (UTC)
   workflow_dispatch:
 
 jobs:
@@ -10,7 +10,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -23,4 +24,12 @@ jobs:
           pip install -r backend/requirements.txt
 
       - name: Run feature pipeline
-        run: python scripts/run_feature_pipeline.py
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          CITY: ${{ secrets.CITY }}
+          COUNTRY: ${{ secrets.COUNTRY }}
+          LATITUDE: ${{ secrets.LATITUDE }}
+          LONGITUDE: ${{ secrets.LONGITUDE }}
+        run: |
+          python scripts/run_feature_pipeline.py
