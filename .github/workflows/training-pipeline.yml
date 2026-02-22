@@ -2,35 +2,41 @@ name: Training Pipeline - MongoDB Model Retraining
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # Run daily at 2 AM
+    - cron: '0 2 * * *'   # Daily at 2 AM (UTC)
   workflow_dispatch:
 
 jobs:
   train-model:
     runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r backend/requirements.txt
-    
-    - name: Train model from MongoDB
-      env:
-        MONGO_URI: ${{ secrets.MONGO_URI }}
-      run: |
-        python scripts/run_training_pipeline.py
 
-    - name: Upload model artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: trained-model
-        path: backend/models/
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      # (Optional but recommended for first run)
+      - name: Verify project structure
+        run: |
+          echo "Listing project files:"
+          ls -R
+
+      - name: Train model from MongoDB
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: |
+          python scripts/run_training_pipeline.py
+
+      - name: Upload trained model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-model
+          path: backend/models/
