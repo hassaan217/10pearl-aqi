@@ -23,15 +23,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
 
-      # (Optional but recommended for first run)
-      - name: Verify project structure
-        run: |
-          echo "Listing project files:"
-          ls -R
-
       - name: Train model from MongoDB
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
+          MODEL_PATH: ${{ secrets.MODEL_PATH }}
         run: |
           python scripts/run_training_pipeline.py
 
