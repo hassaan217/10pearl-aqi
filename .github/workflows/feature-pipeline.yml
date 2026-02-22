@@ -1,31 +1,26 @@
 name: Feature Pipeline - MongoDB Data Collection
 
 on:
-  schedule:
-    - cron: '0 * * * *'  # Run every hour
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   collect-data:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r backend/requirements.txt
-    
-    - name: Run data collection (MongoDB + API)
-      env:
-        MONGO_URI: ${{ secrets.MONGO_URI }}
-        OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-      run: |
-        python scripts/run_feature_pipeline.py
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Run feature pipeline
+        run: python scripts/run_feature_pipeline.py
